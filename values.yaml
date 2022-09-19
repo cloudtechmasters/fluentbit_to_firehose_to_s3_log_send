@@ -1,0 +1,139 @@
+global:
+## Override the deployment namespace
+#   namespaceOverride:
+
+image:
+  repository: public.ecr.aws/aws-observability/aws-for-fluent-bit
+  tag: 2.21.5
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+service:
+  parsersFiles:
+    - /fluent-bit/parsers/parsers.conf
+  # extraParsers: |
+  #   [PARSER]
+  #       Name   logfmt
+  #       Format logfmt
+
+
+input:
+  tag: "kube.*"
+  path: "/var/log/containers/*.log"
+  db: "/var/log/flb_kube.db"
+  parser: docker
+  dockerMode: "On"
+  memBufLimit: 1MB
+  skipLongLines: "On"
+  refreshInterval: 1
+
+additionalInputs: |
+    [INPUT]
+        Name systemd
+        Tag host.*
+        Systemd_Filter _SYSTEMD_UNIT=kubelet.service
+        Read_From_Tail On
+        Max_Entries 500
+        Mem_Buf_Limit 1MB
+
+filter:
+  match: "kube.*"
+  kubeURL: "https://kubernetes.default.svc.cluster.local:443"
+  mergeLog: "On"
+  mergeLogKey: "data"
+  k8sLoggingParser: "On"
+  k8sLoggingExclude: "On"
+
+# extraFilters: |
+#   [FILTER]
+#       Name   grep
+#       Match  *
+#       Exclude log lvl=debug*
+
+additionalFilters: |
+    [FILTER]
+        Name modify
+        Match *
+        Rename log message
+
+    [FILTER]
+        Name grep
+        Match kube.*
+        Exclude kubernetes_container_name aws-for-fluent-bit
+
+    [FILTER]
+        Name modify
+        Match kube.*
+        Rename log message
+        Add k8s.cluster.name eks-travel-qa
+        Add tag infra-log
+
+    [FILTER]
+        Name     throttle
+        Match    kube.*
+        Rate     1000
+        Window   1
+        Print_Status true
+        Interval 30s
+
+cloudWatch:
+  enabled: false
+
+firehose:
+  enabled: true
+  match: "*"
+  region: "us-east-1"
+  deliveryStream: "PUT-S3-OTroe"
+  dataKeys:
+  roleArn:
+  endpoint:
+  timeKey:
+
+kinesis:
+  enabled: false
+#  extraOutputs: |
+
+elasticsearch:
+  enabled: false
+  match: "*"
+  host: "elasticsearch.kube-logging.svc.cluster.local"
+  awsRegion: "us-east-1"
+  awsAuth: "On"
+  tls: "On"
+  port: "9200"
+  scheme: http
+  retryLimit: 6
+  replaceDots: "On"
+  # extraOutputs: |
+  #   Index = my-index
+
+#additionalOutputs: |
+#    [OUTPUT]
+#        Name stdout
+#        Match kube.*
+#        Format json
+#        Json_date_key timestamp
+#        Json_date_format iso8601
+
+  #serviceAccount:
+  #create: true
+  #annotations: { eks.amazonaws.com/role-arn: arn:aws:iam::346319152574:role/Travel-qa-logging-elasticsearch-role }
+  #name:
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name:
+
+resources:
+  limits:
+    memory: 500Mi
+  requests:
+    cpu: 250m
+    memory: 500Mi
+
+## Assign a PriorityClassName to pods if set
+# priorityClassName: system-node-critical
